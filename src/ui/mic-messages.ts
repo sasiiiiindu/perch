@@ -1,4 +1,4 @@
-import type { MicErrorKind } from '../audio/mic-errors';
+import { classifyMicError, type MicErrorKind } from '../audio/mic-errors';
 
 /** What to tell the user for each way the microphone can fail. */
 export const MIC_MESSAGES: Record<MicErrorKind, string> = {
@@ -14,3 +14,10 @@ export const MIC_MESSAGES: Record<MicErrorKind, string> = {
   disconnected: 'The microphone was disconnected. Reconnect it, then tap Start tuning.',
   unknown: "Couldn't start the microphone.",
 };
+
+/** The message for a failed start, and whether tapping Start again could help. */
+export function micStartFailure(error: unknown): { text: string; canRetry: boolean } {
+  const kind = classifyMicError(error);
+  const detail = kind === 'unknown' && error instanceof Error ? ` (${error.name}: ${error.message})` : '';
+  return { text: MIC_MESSAGES[kind] + detail, canRetry: kind !== 'insecure' && kind !== 'unsupported' };
+}

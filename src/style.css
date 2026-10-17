@@ -164,3 +164,59 @@ h2 {
   color: #6b6b6b;
   margin: 0.25rem 0;
 }
+
+/* ---- Tuner: the wire scene fills the window ---- */
+
+/* Colours (--ground, --wire, --text, --muted) are set from COLORS in birds.ts. */
+.tuner canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: manipulation;
+}
+
+/* Sits under the wire; its top is set from the scene layout. */
+.tuner-panel {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  max-width: 28rem;
+  margin: 0 auto;
+  text-align: center;
+  color: var(--text);
+}
+
+.tuner-start {
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 500;
+  padding: 0.75rem 1.75rem;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ground);
+  background: var(--wire);
+  cursor: pointer;
+}
+
+.tuner-start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tuner-message {
+  margin: 1rem 0 0;
+  line-height: 1.4;
+}
+
+.tuner-hint {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--muted);
+  transition: opacity 0.3s;
+}
+
+.tuner-hint.faded {
+  opacity: 0;
+}

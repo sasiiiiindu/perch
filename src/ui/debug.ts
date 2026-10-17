@@ -1,15 +1,16 @@
 /**
  * Plain debug screen: the tracker's answer on top, the raw detector output
  * below it, and a cents bar showing both so the smoothing is visible.
- * Deliberately unstyled; this will later live behind ?debug.
+ * Deliberately unstyled; open it with ?debug.
  */
 
-import { classifyMicError } from '../audio/mic-errors';
-import { micBlocker, startMic, type MicSession } from '../audio/mic';
+import { micBlocker, type MicSession } from '../audio/mic';
 import { centsBetween, midiToFrequency } from '../audio/notes';
-import { MIN_CLARITY, analyseFrame, type FrameAnalysis, type Reading } from '../audio/reading';
+import { MIN_CLARITY, type FrameAnalysis, type Reading } from '../audio/reading';
 import { DEFAULT_TRACKER, Tracker, type TrackerOutput, type TunerState } from '../audio/tracker';
-import { MIC_MESSAGES } from './mic-messages';
+import { signed } from '../format';
+import { MIC_MESSAGES, micStartFailure } from './mic-messages';
+import { startTuning } from './tuning-session';
 
 /** Friendly names for STANDARD_TUNING, by string index. */
 const STRING_LABELS = ['low E', 'A', 'D', 'G', 'B', 'high E'];
@@ -32,13 +33,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-/** "+4.2", "−4.2" (true minus sign), "0.0". */
-function signed(value: number, digits: number): string {
-  const abs = Math.abs(value).toFixed(digits);
-  if (Number(abs) === 0) return abs;
-  return (value > 0 ? '+' : '−') + abs;
 }
 
 function dbfs(value: number | null): string {
@@ -184,8 +178,7 @@ export function mountDebugScreen(root: HTMLElement): void {
     placeMarker(rawMarker, centsBetween(reading.frequency, target));
   }
 
-  function showFrame(analysis: FrameAnalysis, sampleRate: number, timeMs: number): void {
-    const output = tracker.update(analysis, timeMs);
+  function showFrame(output: TrackerOutput, analysis: FrameAnalysis, sampleRate: number): void {
     showTracker(output);
     showRaw(analysis.reading, output);
 
@@ -211,9 +204,8 @@ export function mountDebugScreen(root: HTMLElement): void {
     // Fresh tracker each start, so the room noise is measured again.
     tracker = new Tracker();
     try {
-      session = await startMic({
-        onFrame: (samples, sampleRate, timeMs) =>
-          showFrame(analyseFrame(samples, sampleRate), sampleRate, timeMs),
+      session = await startTuning(tracker, {
+        onUpdate: showFrame,
         onEnded: () => {
           showMessage(MIC_MESSAGES.disconnected);
           raw.classList.add('stale');
@@ -229,10 +221,9 @@ export function mountDebugScreen(root: HTMLElement): void {
       startButton.hidden = true;
       readout.hidden = false;
     } catch (error) {
-      const kind = classifyMicError(error);
-      const detail = kind === 'unknown' && error instanceof Error ? ` (${error.name}: ${error.message})` : '';
-      showMessage(MIC_MESSAGES[kind] + detail);
-      startButton.disabled = kind === 'insecure' || kind === 'unsupported';
+      const failure = micStartFailure(error);
+      showMessage(failure.text);
+      startButton.disabled = !failure.canRetry;
     }
   }
 
