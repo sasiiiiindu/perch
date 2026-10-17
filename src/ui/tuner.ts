@@ -56,6 +56,10 @@ export function mountTuner(root: HTMLElement): void {
   screen.style.setProperty('--ground', COLORS.ground);
 
   const scene = new Scene(DEFAULT_TRACKER.inTuneCents);
+  // Followed live, so switching the system setting takes effect without a reload.
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  scene.reducedMotion = reducedMotion.matches;
+  reducedMotion.addEventListener('change', () => { scene.reducedMotion = reducedMotion.matches; });
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D is not available');
   let size: CanvasSize | null = null;

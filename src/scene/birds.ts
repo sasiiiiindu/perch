@@ -128,9 +128,15 @@ const P = {
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
+/** Opacity of an inactive bird. */
+export const DIM_OPACITY = 0.38;
+
 export interface DrawOptions {
   dim?: boolean; // inactive birds sit back at 38% opacity
+  opacity?: number; // 0–1; overrides dim, so a bird can fade between dim and full
   time?: number; // seconds; adds breathing and tremble when given
+  note?: { rise: number; alpha: number }; // overrides the music note: lift in design units, alpha 0–1
+  crestTilt?: number; // degrees; the crest pivots on its base
 }
 
 /**
@@ -144,7 +150,7 @@ export function drawBird(ctx: CanvasRenderingContext2D, look: BirdLook, pose: Bi
   const shake = t === undefined ? 0 : Math.sin(t * 55) * 0.9 * pose.jitter;
 
   ctx.save();
-  ctx.globalAlpha = opts.dim ? 0.38 : 1;
+  ctx.globalAlpha = opts.opacity ?? (opts.dim ? DIM_OPACITY : 1);
   const base = ctx.globalAlpha;
   const alpha = (a: number) => { ctx.globalAlpha = base * a; };
 
@@ -193,7 +199,13 @@ export function drawBird(ctx: CanvasRenderingContext2D, look: BirdLook, pose: Bi
   fill(look.light); ellipse(53, 77, 20, 15);
   fill(look.dark); ellipse(73, 70, 15, 10.5, rad(pose.wingRot));
   if (look.tuft) { fill(look.dark); ctx.fill(P.tuft); }
-  if (look.crest) { fill(look.dark); ctx.fill(P.crest); }
+  if (look.crest) {
+    fill(look.dark);
+    ctx.save();
+    if (opts.crestTilt) { ctx.translate(52, 42); ctx.rotate(rad(opts.crestTilt)); ctx.translate(-52, -42); }
+    ctx.fill(P.crest);
+    ctx.restore();
+  }
   stroke(P.ruffle, look.dark, 2.4, pose.ruffle);
   if (pose.blush > 0.001) { fill(COLORS.blush, pose.blush); ellipse(39, 66, 4.6, 2.6); }
 
@@ -219,9 +231,13 @@ export function drawBird(ctx: CanvasRenderingContext2D, look: BirdLook, pose: Bi
   stroke(P.tremble, COLORS.sharp, 2.2, pose.jitter);
 
   // Music note when in tune
-  if (pose.happy > 0.001) {
-    fill(COLORS.inTune, pose.happy); ellipse(22, 34, 4.2, 3.2, rad(-20));
-    stroke(P.noteStem, COLORS.inTune, 2, pose.happy);
+  const note = opts.note ?? { rise: 0, alpha: pose.happy };
+  if (note.alpha > 0.001) {
+    ctx.save();
+    ctx.translate(0, -note.rise);
+    fill(COLORS.inTune, note.alpha); ellipse(22, 34, 4.2, 3.2, rad(-20));
+    stroke(P.noteStem, COLORS.inTune, 2, note.alpha);
+    ctx.restore();
   }
 
   ctx.restore();

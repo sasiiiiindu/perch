@@ -7,8 +7,10 @@
  */
 
 import { signed } from '../format';
-import { COLORS, FLOCK, STRING_ORDER, drawBird, mixPose, poseFor, type BirdPose } from './birds';
+import { BirdActor, type ActorFrame } from './bird-actor';
+import { COLORS, DIM_OPACITY, FLOCK, STRING_ORDER, drawBird } from './birds';
 import { GUTTER, birdX, layout, type SceneLayout } from './layout';
+import { PERSONALITY } from './personality';
 
 export type Verdict = 'flat' | 'sharp' | 'inTune';
 
@@ -21,12 +23,8 @@ export interface SceneInput {
 }
 
 const LOOKS = STRING_ORDER.map((id) => FLOCK[id]);
-const REST_POSES = LOOKS.map((look) => poseFor(look, null));
 
-/** Time constants (s) for easing toward the target pose and size. */
-const POSE_TAU = 0.08;
-const ZOOM_TAU = 0.15;
-/** Longest step the easing takes in one frame, so a stalled tab doesn't jump oddly. */
+/** Longest step the animation takes in one frame, so a stalled tab doesn't jump oddly. */
 const MAX_DT = 0.1;
 
 const TEXT_COLORS: Record<Verdict, string> = {
@@ -48,17 +46,28 @@ export function centsForPose(cents: number, verdict: Verdict, inTuneCents: numbe
   return Math.max(cents, inTuneCents + 0.01);
 }
 
+/** The label under the active bird; measured once per change, not every frame. */
+interface Label {
+  note: string;
+  cents: string;
+  halfWidth: number;
+}
+
 export class Scene {
   private l: SceneLayout | null = null;
-  private poses: BirdPose[] = [...REST_POSES];
-  private zooms: number[] = LOOKS.map(() => 1);
+  private readonly actors = STRING_ORDER.map((id, i) => new BirdActor(LOOKS[i], PERSONALITY[id]));
+  private readonly frames: ActorFrame[] = [];
   private lastTime: number | null = null;
+  private label: Label | null = null;
+  /** Set from prefers-reduced-motion. */
+  reducedMotion = false;
 
   constructor(private readonly inTuneCents: number) {}
 
   /** Call on every size change (CSS px). Returns the new layout. */
   resize(width: number, height: number): SceneLayout {
     this.l = layout(width, height, LOOKS.map((look) => look.scale));
+    this.label = null; // font sizes may have changed
     return this.l;
   }
 
@@ -69,8 +78,22 @@ export class Scene {
     const dt = this.lastTime === null ? MAX_DT : Math.min(MAX_DT, Math.max(0, time - this.lastTime));
     this.lastTime = time;
 
-    const active = input.cents === null || input.verdict === null ? null : input.active;
-    this.ease(active, input, dt);
+    const { cents, verdict } = input;
+    const active = cents === null || verdict === null ? null : input.active;
+
+    this.actors.forEach((actor, i) => {
+      const isActive = i === active;
+      this.frames[i] = actor.update({
+        active: isActive,
+        poseCents: isActive ? centsForPose(cents!, verdict!, this.inTuneCents) : null,
+        inTune: isActive && verdict === 'inTune',
+        inTuneCents: this.inTuneCents,
+        sharpCents: isActive && verdict === 'sharp' ? cents! : 0,
+        zoom: isActive ? l.zoom[i] : 1,
+        sceneIdle: active === null,
+        reduced: this.reducedMotion,
+      }, time, dt);
+    });
 
     ctx.fillStyle = COLORS.ground;
     ctx.fillRect(0, 0, l.width, l.height);
@@ -82,62 +105,55 @@ export class Scene {
     ctx.lineTo(l.width, l.wireY);
     ctx.stroke();
 
-    // Resting birds first, so the active one (which may have grown) sits on top.
-    LOOKS.forEach((_, i) => { if (i !== active) this.drawOne(ctx, i, true, time); });
+    // Dimmer birds first, so a bird fading in (and the active one, which may
+    // have grown) sits on top. At most two birds are ever between dim and full.
+    for (let i = 0; i < LOOKS.length; i++) if (i !== active && this.actors[i].opacity < 0.5) this.drawOne(ctx, i);
+    for (let i = 0; i < LOOKS.length; i++) if (i !== active && this.actors[i].opacity >= 0.5) this.drawOne(ctx, i);
     if (active !== null) {
-      this.drawOne(ctx, active, false, time);
-      this.drawText(ctx, active, input.cents!, input.verdict!);
+      this.drawOne(ctx, active);
+      this.drawText(ctx, active, cents!, verdict!);
     }
   }
 
-  private ease(active: number | null, input: SceneInput, dt: number): void {
-    const poseT = 1 - Math.exp(-dt / POSE_TAU);
-    const zoomT = 1 - Math.exp(-dt / ZOOM_TAU);
-    LOOKS.forEach((look, i) => {
-      const target = i === active
-        ? poseFor(look, centsForPose(input.cents!, input.verdict!, this.inTuneCents), this.inTuneCents)
-        : REST_POSES[i];
-      this.poses[i] = mixPose(this.poses[i], target, poseT);
-      const zoomTarget = i === active ? this.l!.zoom[i] : 1;
-      this.zooms[i] += (zoomTarget - this.zooms[i]) * zoomT;
-    });
-  }
-
-  private drawOne(ctx: CanvasRenderingContext2D, i: number, dim: boolean, time: number): void {
+  private drawOne(ctx: CanvasRenderingContext2D, i: number): void {
     const l = this.l!;
     const look = LOOKS[i];
-    const zoom = this.zooms[i];
-    drawBird(ctx, look, this.poses[i], birdX(l, i, look.scale, zoom), l.wireY, l.size * zoom, { dim, time });
+    const f = this.frames[i];
+    const size = l.size * f.zoom;
+    const unit = (size * look.scale) / 120; // design units → CSS px for this bird
+    const x = birdX(l, i, look.scale, f.zoom) + f.dx * unit;
+    drawBird(ctx, look, f.pose, x, l.wireY - f.lift * unit, size, f.opts);
   }
 
   private drawText(ctx: CanvasRenderingContext2D, i: number, cents: number, verdict: Verdict): void {
     const l = this.l!;
     const note = LOOKS[i].string;
     const centsText = `${signed(cents, 0)} ¢`;
-
-    ctx.save();
-    ctx.fillStyle = TEXT_COLORS[verdict];
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
     const noteFont = `600 ${l.noteFont}px ${FONT}`;
     const centsFont = `500 ${l.centsFont}px ${FONT}`;
 
-    // Centre under the bird, but keep the whole label on screen at the ends.
-    ctx.font = noteFont;
-    const half = Math.max(ctx.measureText(note).width, measure(ctx, centsFont, centsText)) / 2;
-    const x = Math.max(half + GUTTER, Math.min(l.width - half - GUTTER, birdX(l, i, LOOKS[i].scale, this.zooms[i])));
+    if (!this.label || this.label.note !== note || this.label.cents !== centsText) {
+      ctx.font = noteFont;
+      const noteWidth = ctx.measureText(note).width;
+      ctx.font = centsFont;
+      this.label = { note, cents: centsText, halfWidth: Math.max(noteWidth, ctx.measureText(centsText).width) / 2 };
+    }
 
+    // Centre under the bird, but keep the whole label on screen at the ends.
+    const half = this.label.halfWidth;
+    const birdAt = birdX(l, i, LOOKS[i].scale, this.frames[i].zoom);
+    const x = Math.max(half + GUTTER, Math.min(l.width - half - GUTTER, birdAt));
+
+    ctx.save();
+    // The label fades in with its bird.
+    ctx.globalAlpha = Math.max(0, (this.actors[i].opacity - DIM_OPACITY) / (1 - DIM_OPACITY));
+    ctx.fillStyle = TEXT_COLORS[verdict];
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = noteFont;
     ctx.fillText(note, x, l.textTop);
     ctx.font = centsFont;
     ctx.fillText(centsText, x, l.textTop + l.noteFont + 6);
     ctx.restore();
   }
-}
-
-function measure(ctx: CanvasRenderingContext2D, font: string, text: string): number {
-  const previous = ctx.font;
-  ctx.font = font;
-  const width = ctx.measureText(text).width;
-  ctx.font = previous;
-  return width;
 }
