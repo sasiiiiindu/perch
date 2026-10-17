@@ -16,6 +16,18 @@ export interface PitchProcessorOptions {
   hopSize: number;
 }
 
+export interface FrameMessage {
+  /** The window, oldest sample first. */
+  samples: Float32Array;
+  /**
+   * Audio-clock position just after the newest sample, in sample frames.
+   * Timing comes from here rather than from when the message arrives: a busy
+   * main thread receives messages in bursts, which would distort every
+   * duration the tracker measures.
+   */
+  endFrame: number;
+}
+
 /** Must match PROCESSOR_NAME in src/audio/mic.ts. */
 const PROCESSOR_NAME = 'perch-pitch-frames';
 
@@ -53,19 +65,20 @@ class PitchFrameProcessor extends AudioWorkletProcessor {
       // Subtract rather than reset: the hop isn't a multiple of 128, and
       // carrying the remainder keeps the average rate exact.
       this.sinceLastPost -= this.hopSize;
-      this.post();
+      this.post(currentFrame + channel.length);
     }
     // Keep the processor alive while the node exists.
     return true;
   }
 
   /** Posts the window oldest-sample-first, transferring the buffer to avoid a copy. */
-  private post(): void {
+  private post(endFrame: number): void {
     const ring = this.ring;
     const frame = new Float32Array(ring.length);
     frame.set(ring.subarray(this.writeIndex), 0);
     frame.set(ring.subarray(0, this.writeIndex), ring.length - this.writeIndex);
-    this.port.postMessage(frame, [frame.buffer]);
+    const message: FrameMessage = { samples: frame, endFrame };
+    this.port.postMessage(message, [frame.buffer]);
   }
 }
 

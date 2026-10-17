@@ -17,6 +17,9 @@ declare abstract class AudioWorkletProcessor {
   ): boolean;
 }
 
+/** Index of the first sample of the block being processed (the audio clock). */
+declare const currentFrame: number;
+
 declare function registerProcessor(
   name: string,
   processorCtor: new (options: AudioWorkletNodeOptions) => AudioWorkletProcessor,

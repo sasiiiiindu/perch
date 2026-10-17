@@ -68,15 +68,41 @@ h1 {
   text-align: right;
 }
 
-/* No clear pitch: last values stay, dimmed. Rejected: shown, but greyed. */
-.readout.stale .note,
-.readout.stale .fields,
-.readout.stale .bar-marker {
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #6b6b6b;
+}
+
+.state {
+  font-size: 2rem;
+  margin-top: 0.25rem;
+}
+
+.raw {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #ddd8cf;
+}
+
+.raw-note {
+  font-size: 2.5rem;
+  font-weight: 600;
+}
+
+.fields.small {
+  font-size: 1.1rem;
+}
+
+/* Raw, no clear pitch: last values stay, dimmed. Rejected: shown, but greyed. */
+.raw.stale .raw-note,
+.raw.stale .fields {
   opacity: 0.3;
 }
 
-.readout.rejected .note,
-.readout.rejected .fields dd {
+.raw.rejected .raw-note,
+.raw.rejected .fields dd {
   color: #9a9a9a;
 }
 
@@ -108,6 +134,13 @@ h1 {
   width: 4px;
   transform: translateX(-50%);
   background: #2b2b2b;
+}
+
+/* The raw reading: faint, behind the tracker's marker. */
+.bar-marker.raw {
+  background: #2b2b2b;
+  opacity: 0.25;
+  width: 2px;
 }
 
 /* Pinned at an end: the real value is beyond ±50 cents. */

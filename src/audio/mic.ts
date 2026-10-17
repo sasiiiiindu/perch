@@ -7,7 +7,7 @@
  */
 
 import { MicError, checkMicEnvironment, type MicErrorKind } from './mic-errors';
-import type { PitchProcessorOptions } from './pitch-processor';
+import type { FrameMessage, PitchProcessorOptions } from './pitch-processor';
 // `?worker&url` makes Vite bundle the processor to its own JS file and give us
 // its URL (with the GitHub Pages base path). Plain `?url` would ship raw TS.
 import processorUrl from './pitch-processor.ts?worker&url';
@@ -33,8 +33,11 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 };
 
 export interface MicHandlers {
-  /** A window of WINDOW_SIZE samples, oldest first, ~READINGS_PER_SECOND times a second. */
-  onFrame(samples: Float32Array, sampleRate: number): void;
+  /**
+   * A window of WINDOW_SIZE samples, oldest first, ~READINGS_PER_SECOND times
+   * a second. `timeMs` is the audio-clock time of the newest sample.
+   */
+  onFrame(samples: Float32Array, sampleRate: number, timeMs: number): void;
   /** The mic stopped mid-session (unplugged, or permission revoked). */
   onEnded(): void;
   /** AudioContext state changed (e.g. iOS suspends it during a phone call). */
@@ -108,8 +111,8 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
   const mute = new GainNode(context, { gain: 0 });
   source.connect(node).connect(mute).connect(context.destination);
 
-  node.port.onmessage = (event: MessageEvent<Float32Array>) =>
-    handlers.onFrame(event.data, context.sampleRate);
+  node.port.onmessage = ({ data }: MessageEvent<FrameMessage>) =>
+    handlers.onFrame(data.samples, context.sampleRate, (data.endFrame / context.sampleRate) * 1000);
 
   const track = stream.getAudioTracks()[0];
   track.addEventListener('ended', () => handlers.onEnded());
