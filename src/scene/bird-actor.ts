@@ -20,6 +20,16 @@ const ZOOM_TAU = 0.06;
 /** A note wobbling around ±3 ¢ shouldn't keep re-triggering the in-tune celebration. */
 const ARRIVE_REFRACTORY_S = 1;
 
+/**
+ * A tuned bird rests sitting up a little prouder: head raised, a touch
+ * taller and narrower, eyes fully awake. It stays off the channels the
+ * readout uses for sharp (bigger body, white eye ring, ruffles), and only
+ * shows while the bird is inactive, so it never mixes with a live reading.
+ */
+function proudPose(rest: BirdPose): BirdPose {
+  return { ...rest, sx: rest.sx * 0.98, sy: rest.sy * 1.03, tilt: rest.tilt + 6, lid: 0 };
+}
+
 export interface ActorInput {
   active: boolean;
   /** Cents for poseFor (already nudged to agree with the tracker's state); null when resting. */
@@ -30,6 +40,8 @@ export interface ActorInput {
   sharpCents: number; // > 0 when sharp, else 0
   zoom: number; // target size multiplier
   sceneIdle: boolean; // no string is playing at all
+  /** Tuned this session: rests in the proud pose. */
+  done: boolean;
   reduced: boolean;
 }
 
@@ -44,6 +56,7 @@ export interface ActorFrame {
 
 export class BirdActor {
   private readonly rest: BirdPose;
+  private readonly proud: BirdPose;
   private readonly spring: Smooth2<BirdPose>;
   private readonly fade = new Smooth2(DIM_OPACITY, lerp, DIM_TAU);
   private readonly grow = new Smooth2(1, lerp, ZOOM_TAU);
@@ -57,6 +70,7 @@ export class BirdActor {
 
   constructor(private readonly look: BirdLook, private readonly p: Personality, private readonly rng: Rng = Math.random) {
     this.rest = poseFor(look, null);
+    this.proud = proudPose(this.rest);
     this.spring = new Smooth2(this.rest, mixPose, p.springTau);
     this.blinks = new Scheduler(p.blinkEvery, BLINK_SPREAD, rng);
     this.fidgets = p.fidgetEvery === null ? null : new Scheduler(p.fidgetEvery, FIDGET_SPREAD, rng);
@@ -96,7 +110,8 @@ export class BirdActor {
     }
     if (active) tr.blink = NEVER; // the active bird's eyes are part of the readout
 
-    const target = input.poseCents === null ? this.rest : poseFor(this.look, input.poseCents, input.inTuneCents);
+    const resting = input.done ? this.proud : this.rest;
+    const target = input.poseCents === null ? resting : poseFor(this.look, input.poseCents, input.inTuneCents);
     const sprung = this.spring.step(target, dt);
     this.fade.tau = active ? BRIGHTEN_TAU : DIM_TAU;
     this.fade.step(active ? 1 : DIM_OPACITY, dt);

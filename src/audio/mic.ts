@@ -45,6 +45,8 @@ export interface MicHandlers {
 }
 
 export interface MicSession {
+  /** Already unlocked by the user's tap, so it can also play sound (the chorus). */
+  context: AudioContext;
   sampleRate: number;
   /** What the browser actually applied, which may differ from what we asked for. */
   settings: MediaTrackSettings;
@@ -127,6 +129,7 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
   // The returned object holds `source` and `node` through stop()'s closure.
   // That matters: a garbage-collected MediaStreamSource silently stops the audio.
   return {
+    context,
     sampleRate: context.sampleRate,
     settings: track.getSettings(),
     get state() {

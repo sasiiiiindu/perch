@@ -20,6 +20,13 @@ export interface SceneInput {
   cents: number | null;
   /** The tracker's settled state; the bird and the text both follow it. */
   verdict: Verdict | null;
+  /** Strings tuned this session, low E first; those birds sit prouder. */
+  done: readonly boolean[];
+  /**
+   * During the chorus: the birds singing right now (none in the pauses).
+   * While set, it replaces the live reading: no label, and singers don't grow.
+   */
+  singing: readonly number[] | null;
 }
 
 const LOOKS = STRING_ORDER.map((id) => FLOCK[id]);
@@ -78,19 +85,22 @@ export class Scene {
     const dt = this.lastTime === null ? MAX_DT : Math.min(MAX_DT, Math.max(0, time - this.lastTime));
     this.lastTime = time;
 
-    const { cents, verdict } = input;
-    const active = cents === null || verdict === null ? null : input.active;
+    const { cents, verdict, singing } = input;
+    const active = singing !== null || cents === null || verdict === null ? null : input.active;
 
     this.actors.forEach((actor, i) => {
       const isActive = i === active;
+      const sings = singing?.includes(i) ?? false;
       this.frames[i] = actor.update({
-        active: isActive,
-        poseCents: isActive ? centsForPose(cents!, verdict!, this.inTuneCents) : null,
-        inTune: isActive && verdict === 'inTune',
+        active: isActive || sings,
+        // A singer takes the in-tune pose: closed happy eyes, open beak, note.
+        poseCents: isActive ? centsForPose(cents!, verdict!, this.inTuneCents) : sings ? 0 : null,
+        inTune: sings || (isActive && verdict === 'inTune'),
         inTuneCents: this.inTuneCents,
         sharpCents: isActive && verdict === 'sharp' ? cents! : 0,
         zoom: isActive ? l.zoom[i] : 1,
-        sceneIdle: active === null,
+        sceneIdle: active === null && singing === null,
+        done: input.done[i] ?? false,
         reduced: this.reducedMotion,
       }, time, dt);
     });

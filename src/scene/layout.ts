@@ -23,6 +23,8 @@ export const GUTTER = 16;
 /** The active bird is drawn at least this wide (CSS px), so its pose reads at arm's length. */
 export const MIN_ACTIVE_WIDTH = 150;
 const VERTICAL_MARGIN = 24;
+/** Kept clear at the bottom for the Reset / Mute buttons (44 px tall, 16 px off the edge). */
+export const CONTROLS_RESERVE = 72;
 /** Never draw the birds bigger than this, even on a huge window. */
 const MAX_SIZE = 280;
 /** Neighbouring birds may overlap a little (tail behind the next beak). */
@@ -53,16 +55,18 @@ export function layout(width: number, height: number, scales: readonly number[])
   const textBlock = 16 + noteFont + 6 + centsFont;
 
   const slotWidth = (width - 2 * GUTTER) / scales.length;
-  const sizeForHeight = (height - 2 * VERTICAL_MARGIN - textBlock) / TOP;
+  const sizeForHeight = (height - VERTICAL_MARGIN - CONTROLS_RESERVE - textBlock) / TOP;
   const size = Math.max(1, Math.min(slotWidth * SLOT_FILL, sizeForHeight, MAX_SIZE));
 
   const slots = scales.map((_, i) => GUTTER + slotWidth * (i + 0.5));
   const zoom = scales.map((s) => Math.max(1, MIN_ACTIVE_WIDTH / (WIDTH * s * size)));
 
   // Centre the tallest possible picture (any bird active, zoomed) plus the
-  // text, so the wire never moves when a different string is played.
+  // text, so the wire never moves when a different string is played. On a
+  // short screen, lift it clear of the buttons, but never off the top.
   const above = Math.max(...scales.map((s, i) => TOP * s * size * zoom[i]));
-  const wireY = Math.round(Math.max(VERTICAL_MARGIN, (height - above - textBlock) / 2) + above);
+  const centred = Math.max(VERTICAL_MARGIN, (height - above - textBlock) / 2) + above;
+  const wireY = Math.round(Math.max(above, Math.min(centred, height - CONTROLS_RESERVE - textBlock)));
 
   return { width, height, wireY, size, slots, zoom, textTop: wireY + 16, noteFont, centsFont };
 }

@@ -220,3 +220,61 @@ h2 {
 .tuner-hint.faded {
   opacity: 0;
 }
+
+/* Reset and Mute: small and quiet, along the bottom edge. */
+.tuner-controls {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.tuner-controls[hidden] {
+  display: none;
+}
+
+.tuner-control {
+  font: inherit;
+  font-size: 0.95rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 1rem;
+  border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.tuner-control.icon {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.tuner-control svg {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tuner-control:focus-visible,
+.tuner-start:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

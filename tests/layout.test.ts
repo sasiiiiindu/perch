@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { STANDARD_TUNING } from '../src/audio/notes';
-import { GUTTER, MIN_ACTIVE_WIDTH, birdBounds, birdX, layout } from '../src/scene/layout';
+import { CONTROLS_RESERVE, GUTTER, MIN_ACTIVE_WIDTH, birdBounds, birdX, layout } from '../src/scene/layout';
 
 // Bird scales from FLOCK in birds.ts, low E first (checked against the real
 // file below, so the two can't drift apart).
@@ -71,6 +71,11 @@ describe.each(Object.entries(VIEWPORTS))('layout: %s', (_, [width, height]) => {
     const textBottom = l.textTop + l.noteFont + 6 + l.centsFont;
     expect(textBottom).toBeLessThanOrEqual(height);
     expect(l.noteFont).toBeGreaterThanOrEqual(24);
+  });
+
+  it('keeps the text clear of the Reset / Mute buttons', () => {
+    const textBottom = l.textTop + l.noteFont + 6 + l.centsFont;
+    expect(textBottom).toBeLessThanOrEqual(height - CONTROLS_RESERVE);
   });
 
   it('leaves resting birds where they sit', () => {
