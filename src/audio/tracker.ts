@@ -171,6 +171,15 @@ export class Tracker {
     return this.output(gateOpen, timeMs);
   }
 
+  /**
+   * Change the reference pitch. Whatever was ringing is dropped (its cents
+   * were measured against the old reference); the noise calibration is kept.
+   */
+  setA4(a4: number): void {
+    this.opts.a4 = a4;
+    this.endNote();
+  }
+
   inspect(): TrackerInspection {
     return {
       calibrating: this.gate.calibrating,

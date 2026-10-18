@@ -321,3 +321,26 @@ describe('Tracker output', () => {
     expect(frequency!).toBeCloseTo(hz(A2, -8), 3);
   });
 });
+
+describe('Tracker: A4 reference', () => {
+  it('measures against a new A4 after setA4, keeping the noise calibration', () => {
+    const feed = new Feed(new Tracker()).calibrate(-60);
+    const at442 = hz(A2) * (442 / 440);
+    feed.push(note(at442), 30);
+    expect(feed.last.cents).toBeCloseTo(7.85, 0); // 442 Hz is ~7.85 ¢ above 440
+
+    feed.tracker.setA4(442);
+    expect(feed.tracker.inspect().calibrating).toBe(false);
+    feed.push(note(at442), 30);
+    expect(feed.last.state).toBe('inTune');
+    expect(feed.last.cents).toBeCloseTo(0, 1);
+  });
+
+  it('drops the note that was ringing when A4 changes', () => {
+    const feed = new Feed(new Tracker()).calibrate(-60);
+    feed.push(note(hz(A2, 5)), 30);
+    feed.tracker.setA4(436);
+    feed.push(silence(), 1);
+    expect(feed.last.string).toBeNull();
+  });
+});

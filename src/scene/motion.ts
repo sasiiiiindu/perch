@@ -37,6 +37,13 @@ export class Smooth2<T> {
     this.value = this.mix(this.value, this.mid, k);
     return this.value;
   }
+
+  /** Land on `target` at once. Both stages, or the next step would slide back. */
+  jump(target: T): T {
+    this.mid = target;
+    this.value = target;
+    return target;
+  }
 }
 
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;

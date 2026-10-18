@@ -1,6 +1,7 @@
 /**
  * AudioWorklet processor: collects microphone samples and posts the most
- * recent `windowSize` samples to the main thread every `hopSize` samples.
+ * recent `windowSize` samples every `hopSize` samples, to the analysis
+ * worker over the MessagePort the main thread sends first (see mic.ts).
  *
  * It does no pitch detection itself. The audio thread gets 128 samples
  * (~2.7 ms at 48 kHz) per call, and detectPitch takes a few ms on a 2048-sample
@@ -39,12 +40,17 @@ class PitchFrameProcessor extends AudioWorkletProcessor {
   /** Samples received so far, capped at the window size. */
   private filled = 0;
   private sinceLastPost = 0;
+  /** Where windows go: the analysis worker's port. Windows before it arrives are dropped. */
+  private out: MessagePort | null = null;
 
   constructor(options: AudioWorkletNodeOptions) {
     super(options);
     const { windowSize, hopSize } = options.processorOptions as PitchProcessorOptions;
     this.ring = new Float32Array(windowSize);
     this.hopSize = hopSize;
+    this.port.onmessage = ({ data }: MessageEvent<{ port: MessagePort }>) => {
+      this.out = data.port;
+    };
   }
 
   process(inputs: Float32Array[][]): boolean {
@@ -73,12 +79,13 @@ class PitchFrameProcessor extends AudioWorkletProcessor {
 
   /** Posts the window oldest-sample-first, transferring the buffer to avoid a copy. */
   private post(endFrame: number): void {
+    if (!this.out) return;
     const ring = this.ring;
     const frame = new Float32Array(ring.length);
     frame.set(ring.subarray(this.writeIndex), 0);
     frame.set(ring.subarray(0, this.writeIndex), ring.length - this.writeIndex);
     const message: FrameMessage = { samples: frame, endFrame };
-    this.port.postMessage(message, [frame.buffer]);
+    this.out.postMessage(message, [frame.buffer]);
   }
 }
 

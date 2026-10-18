@@ -30,8 +30,8 @@ export interface Chorus {
  * callback rather than a tap, and on iOS only a context unlocked by a tap
  * can play. `onOver` fires when detection may resume.
  */
-export function startChorus(context: AudioContext, muted: boolean, onOver: () => void): Chorus {
-  const score = chorusScore();
+export function startChorus(context: AudioContext, muted: boolean, a4: number, onOver: () => void): Chorus {
+  const score = chorusScore(a4);
   if (context.state === 'suspended') void context.resume();
 
   let playback: ChorusPlayback | null = muted

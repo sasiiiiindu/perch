@@ -15,6 +15,13 @@ export interface CanvasSize {
   scaleY: number;
 }
 
+/**
+ * Never render more than 2 backing pixels per CSS px. Most phones are 3×:
+ * capping saves 56% of the pixels drawn every frame, and at that density
+ * the difference is very hard to see.
+ */
+const MAX_RATIO = 2;
+
 /** Calls `onResize` now and on every size or pixel-ratio change. Returns a cleanup function. */
 export function fitCanvas(canvas: HTMLCanvasElement, onResize: (size: CanvasSize) => void): () => void {
   // Exact device pixels where the browser reports them (Chrome, Firefox);
@@ -25,8 +32,11 @@ export function fitCanvas(canvas: HTMLCanvasElement, onResize: (size: CanvasSize
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = devicePixels?.w ?? Math.round(rect.width * dpr);
-    const h = devicePixels?.h ?? Math.round(rect.height * dpr);
+    // Exact device pixels only when they're within the cap.
+    const exact = dpr <= MAX_RATIO ? devicePixels : null;
+    const ratio = Math.min(dpr, MAX_RATIO);
+    const w = exact?.w ?? Math.round(rect.width * ratio);
+    const h = exact?.h ?? Math.round(rect.height * ratio);
     // Assigning width/height clears the canvas, so only do it on a real change.
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;

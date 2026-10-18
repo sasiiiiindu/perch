@@ -68,6 +68,8 @@ export class Scene {
   private label: Label | null = null;
   /** Set from prefers-reduced-motion. */
   reducedMotion = false;
+  /** The cents number under the note name (a setting); the note name always shows. */
+  showCents = true;
 
   constructor(private readonly inTuneCents: number) {}
 
@@ -138,7 +140,7 @@ export class Scene {
   private drawText(ctx: CanvasRenderingContext2D, i: number, cents: number, verdict: Verdict): void {
     const l = this.l!;
     const note = LOOKS[i].string;
-    const centsText = `${signed(cents, 0)} ¢`;
+    const centsText = this.showCents ? `${signed(cents, 0)} ¢` : '';
     const noteFont = `600 ${l.noteFont}px ${FONT}`;
     const centsFont = `500 ${l.centsFont}px ${FONT}`;
 
@@ -162,8 +164,10 @@ export class Scene {
     ctx.textBaseline = 'top';
     ctx.font = noteFont;
     ctx.fillText(note, x, l.textTop);
-    ctx.font = centsFont;
-    ctx.fillText(centsText, x, l.textTop + l.noteFont + 6);
+    if (centsText) {
+      ctx.font = centsFont;
+      ctx.fillText(centsText, x, l.textTop + l.noteFont + 6);
+    }
     ctx.restore();
   }
 }

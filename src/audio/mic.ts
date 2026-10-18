@@ -1,13 +1,18 @@
 /**
- * Opens the microphone and streams sample frames from the pitch worklet.
+ * Opens the microphone and streams pitch analyses of it.
  *
  *   mic → MediaStreamSource → AudioWorkletNode → Gain(0) → destination
+ *                                   │ sample windows (MessagePort)
+ *                                   ▼
+ *                            analysis worker ──▶ onAnalysis (main thread)
  *
- * Browser glue only: what to do with each frame is up to the caller.
+ * Browser glue only: what to do with each analysis is up to the caller.
  */
 
+import { WORKER_READY, type AnalysisInit, type AnalysisMessage } from './analysis-protocol';
 import { MicError, checkMicEnvironment, type MicErrorKind } from './mic-errors';
-import type { FrameMessage, PitchProcessorOptions } from './pitch-processor';
+import type { PitchProcessorOptions } from './pitch-processor';
+import type { FrameAnalysis } from './reading';
 // `?worker&url` makes Vite bundle the processor to its own JS file and give us
 // its URL (with the GitHub Pages base path). Plain `?url` would ship raw TS.
 import processorUrl from './pitch-processor.ts?worker&url';
@@ -34,10 +39,10 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 
 export interface MicHandlers {
   /**
-   * A window of WINDOW_SIZE samples, oldest first, ~READINGS_PER_SECOND times
-   * a second. `timeMs` is the audio-clock time of the newest sample.
+   * The analysis of a WINDOW_SIZE-sample window, ~READINGS_PER_SECOND times
+   * a second. `timeMs` is the audio-clock time of the window's newest sample.
    */
-  onFrame(samples: Float32Array, sampleRate: number, timeMs: number): void;
+  onAnalysis(analysis: FrameAnalysis, sampleRate: number, timeMs: number): void;
   /** The mic stopped mid-session (unplugged, or permission revoked). */
   onEnded(): void;
   /** AudioContext state changed (e.g. iOS suspends it during a phone call). */
@@ -94,6 +99,14 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
     void context.close();
     throw new MicError('unsupported', `Could not load the audio worklet: ${String(error)}`);
   }
+  let worker: Worker;
+  try {
+    worker = await startAnalysisWorker();
+  } catch (error) {
+    stopTracks();
+    void context.close();
+    throw new MicError('unsupported', `Could not load the analysis worker: ${String(error)}`);
+  }
   // Resume again: some browsers suspend the context while the permission prompt is up.
   await context.resume();
 
@@ -113,8 +126,13 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
   const mute = new GainNode(context, { gain: 0 });
   source.connect(node).connect(mute).connect(context.destination);
 
-  node.port.onmessage = ({ data }: MessageEvent<FrameMessage>) =>
-    handlers.onFrame(data.samples, context.sampleRate, (data.endFrame / context.sampleRate) * 1000);
+  // Windows go from the worklet straight to the worker; only results come back here.
+  const channel = new MessageChannel();
+  const init: AnalysisInit = { port: channel.port1, sampleRate: context.sampleRate };
+  worker.postMessage(init, [channel.port1]);
+  node.port.postMessage({ port: channel.port2 }, [channel.port2]);
+  worker.onmessage = ({ data }: MessageEvent<AnalysisMessage>) =>
+    handlers.onAnalysis(data.analysis, context.sampleRate, data.timeMs);
 
   const track = stream.getAudioTracks()[0];
   track.addEventListener('ended', () => handlers.onEnded());
@@ -126,8 +144,8 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
   };
   document.addEventListener('visibilitychange', onVisible);
 
-  // The returned object holds `source` and `node` through stop()'s closure.
-  // That matters: a garbage-collected MediaStreamSource silently stops the audio.
+  // The returned object holds `source`, `node` and `worker` through stop()'s
+  // closure. That matters: a garbage-collected MediaStreamSource silently stops the audio.
   return {
     context,
     sampleRate: context.sampleRate,
@@ -137,11 +155,32 @@ export async function startMic(handlers: MicHandlers): Promise<MicSession> {
     },
     async stop() {
       document.removeEventListener('visibilitychange', onVisible);
-      node.port.onmessage = null;
+      worker.onmessage = null;
+      worker.terminate(); // closes its end of the channel too
       source.disconnect();
       node.disconnect();
       stopTracks();
       await context.close();
     },
   };
+}
+
+/** Waits for the worker to say it has loaded: without it the tuner would start and never hear anything. */
+function startAnalysisWorker(timeoutMs = 10_000): Promise<Worker> {
+  const worker = new Worker(new URL('./analysis-worker.ts', import.meta.url), { type: 'module' });
+  return new Promise((resolve, reject) => {
+    const fail = (reason: string) => {
+      window.clearTimeout(timer);
+      worker.terminate();
+      reject(new Error(reason));
+    };
+    const timer = window.setTimeout(() => fail('timed out'), timeoutMs);
+    worker.onerror = (event) => fail(event.message || 'failed to load');
+    worker.onmessage = ({ data }: MessageEvent<unknown>) => {
+      if (data !== WORKER_READY) return;
+      window.clearTimeout(timer);
+      worker.onerror = null;
+      resolve(worker);
+    };
+  });
 }

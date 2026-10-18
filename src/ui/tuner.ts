@@ -1,25 +1,38 @@
 /**
  * The tuner: the full-screen wire scene, a Start button (the mic needs a
- * tap), one quiet line of guidance under the wire, and Reset / Mute.
- * Once all six strings are tuned, the birds sing (see chorus.ts).
+ * tap), one quiet line of guidance under the wire, and a small control row
+ * (Reset, Stop, settings). Once all six strings are tuned, the birds sing.
+ *
+ *   mic-run.ts      mic on/off, wake lock, stopping when hidden
+ *   reward.ts       strings tuned this session, and the chorus
+ *   announcer.ts    note and cents for screen readers
  */
 
-import { CHORUS_LEAD_IN_S } from '../audio/chorus-score';
-import { micBlocker, type MicSession } from '../audio/mic';
+import { micBlocker } from '../audio/mic';
 import { STANDARD_TUNING } from '../audio/notes';
-import { TuningProgress } from '../audio/progress';
 import { DEFAULT_TRACKER, Tracker, type TrackerOutput } from '../audio/tracker';
 import { COLORS } from '../scene/birds';
 import { fitCanvas, type CanvasSize } from '../scene/canvas';
 import { Scene, type SceneInput } from '../scene/scene';
-import { startChorus, type Chorus } from './chorus';
+import { Announcer } from './announcer';
 import { createControls } from './controls';
+import { createFpsMeter } from './fps-meter';
+import { MicRun, type StopReason } from './mic-run';
 import { MIC_MESSAGES, micStartFailure } from './mic-messages';
-import { startTuning } from './tuning-session';
+import { Reward } from './reward';
+import { loadSettings, saveSettings, type Settings } from './settings';
+import { createSettingsPanel } from './settings-panel';
 
 const HINTS = {
   calibrating: 'Stay quiet a moment…',
   listening: 'Play a string',
+};
+
+const START_LABELS: Record<StopReason | 'first', string> = {
+  first: 'Start tuning',
+  user: 'Start tuning',
+  ended: 'Start tuning',
+  hidden: 'Resume tuning',
 };
 
 const IDLE: TrackerOutput = { state: 'idle', string: null, cents: null, frequency: null };
@@ -30,14 +43,18 @@ function liveInput(output: TrackerOutput): Pick<SceneInput, 'active' | 'cents' |
   return { active: output.string?.index ?? null, cents: output.cents, verdict };
 }
 
+const params = new URLSearchParams(location.search);
 /** `?chorus` starts with every string but high E done, so one string plays the whole chorus. */
-const CHECK_CHORUS = new URLSearchParams(location.search).has('chorus');
+const CHECK_CHORUS = params.has('chorus');
+const SHOW_FPS = params.has('fps');
 
 export function mountTuner(root: HTMLElement): void {
+  let settings: Settings = loadSettings();
+
   const screen = document.createElement('main');
   screen.className = 'tuner';
   const canvas = document.createElement('canvas');
-  // Purely visual for now; screen readers get the button, messages and hints.
+  // Purely visual: screen readers get the buttons, messages, hints and the spoken readout below.
   canvas.setAttribute('aria-hidden', 'true');
 
   const panel = document.createElement('div');
@@ -45,7 +62,7 @@ export function mountTuner(root: HTMLElement): void {
   const startButton = document.createElement('button');
   startButton.type = 'button';
   startButton.className = 'tuner-start';
-  startButton.textContent = 'Start tuning';
+  startButton.textContent = START_LABELS.first;
   const message = document.createElement('p');
   message.className = 'tuner-message';
   message.setAttribute('role', 'alert');
@@ -53,28 +70,22 @@ export function mountTuner(root: HTMLElement): void {
   const hint = document.createElement('p');
   hint.className = 'tuner-hint';
   hint.setAttribute('aria-live', 'polite');
-  // The canvas is hidden from screen readers, so progress is announced here.
-  const status = document.createElement('p');
-  status.className = 'visually-hidden';
-  status.setAttribute('aria-live', 'polite');
-  panel.append(startButton, message, hint, status);
+  // Two live regions: progress ("A2 tuned, 3 of 6") and the reading itself
+  // ("A2, 12 cents flat"), so one never cuts the other off.
+  const status = liveRegion();
+  const reading = liveRegion();
+  panel.append(startButton, message, hint, status, reading);
 
-  const progress = new TuningProgress();
-  if (CHECK_CHORUS) progress.markDone([0, 1, 2, 3, 4]);
   const controls = createControls({
-    onReset() {
-      stopChorus();
-      progress.reset();
-      controls.setCanReset(false);
-      status.textContent = 'Reset. No strings tuned yet.';
-    },
-    onMuteChange(muted) {
-      if (muted) chorus?.mute();
-    },
+    onReset: () => reward.reset('Reset. No strings tuned yet.'),
+    onStop: () => run.stop('user'),
+    onSettings: () => settingsPanel.open(),
   });
-  controls.setCanReset(progress.count > 0);
-  controls.element.hidden = true;
-  screen.append(canvas, panel, controls.element);
+  controls.setA4(settings.a4);
+  const settingsPanel = createSettingsPanel(settings, applySettings);
+  const fps = SHOW_FPS ? createFpsMeter() : null;
+  screen.append(canvas, panel, controls.element, settingsPanel.element);
+  if (fps) screen.append(fps.element);
   root.replaceChildren(screen);
 
   // Page colours come from birds.ts so the edges (and notch areas) match the scene.
@@ -85,6 +96,7 @@ export function mountTuner(root: HTMLElement): void {
   screen.style.setProperty('--ground', COLORS.ground);
 
   const scene = new Scene(DEFAULT_TRACKER.inTuneCents);
+  scene.showCents = settings.showCents;
   // Followed live, so switching the system setting takes effect without a reload.
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   scene.reducedMotion = reducedMotion.matches;
@@ -97,23 +109,109 @@ export function mountTuner(root: HTMLElement): void {
     panel.style.top = `${scene.resize(s.width, s.height).textTop}px`;
   });
 
-  let session: MicSession | null = null;
-  let tracker = new Tracker();
-  // Latest tracker answer; the audio callback only stores it, drawing happens per animation frame.
+  // Latest tracker answer; the analysis callback only stores it, drawing happens per animation frame.
   let latest = IDLE;
-  /** While set, the birds sing and pitch detection is paused. */
-  let chorus: Chorus | null = null;
-  let leadIn: number | null = null;
+  const announcer = new Announcer();
 
+  const reward = new Reward({
+    context: () => run.context,
+    muted: () => settings.muted,
+    a4: () => settings.a4,
+    announce: (text) => { status.textContent = text; },
+    onProgress: (count) => controls.setCanReset(count > 0),
+    onChorusStart: () => {
+      latest = IDLE;
+      showHint(null);
+    },
+  });
+  if (CHECK_CHORUS) reward.progress.markDone([0, 1, 2, 3, 4]);
+  controls.setCanReset(reward.progress.count > 0);
+
+  const run = new MicRun({
+    newTracker: () => new Tracker({ a4: settings.a4 }),
+    onUpdate(output, tracker, timeMs) {
+      latest = output;
+      const calibrating = tracker.inspect().calibrating;
+      showHint(calibrating ? HINTS.calibrating : output.string ? null : HINTS.listening);
+      // Only frames that actually heard the string count, not the tracker's decay hold.
+      reward.track(output, tracker.inspect().sinceLastReadingMs === 0, timeMs);
+      speak(output);
+    },
+    // The mic would hear the chorus through the speakers (echo cancellation is off on purpose).
+    isPaused: () => reward.playing,
+    onStarted() {
+      showMessage(null);
+      startButton.hidden = true;
+      controls.setRunning(true);
+    },
+    onStopped(reason) {
+      reward.stop();
+      latest = IDLE;
+      announcer.update({ string: null, verdict: null, cents: null }, 0);
+      showHint(null);
+      showMessage(reason === 'ended' ? MIC_MESSAGES.disconnected : null);
+      startButton.textContent = START_LABELS[reason];
+      startButton.hidden = false;
+      startButton.disabled = false;
+      controls.setRunning(false);
+    },
+    onFailed(error) {
+      const failure = micStartFailure(error);
+      showMessage(failure.text);
+      startButton.disabled = !failure.canRetry;
+    },
+  });
+
+  // ---- Drawing: a requestAnimationFrame loop that stops while the page is hidden ----
+
+  let rafId: number | null = null;
   const frame = (ms: number) => {
-    if (size) {
-      ctx.setTransform(size.scaleX, 0, 0, size.scaleY, 0, 0);
-      const singing = chorus?.singing(ms) ?? null;
-      scene.draw(ctx, { ...liveInput(latest), done: progress.done, singing }, ms / 1000);
-    }
-    requestAnimationFrame(frame);
+    rafId = requestAnimationFrame(frame);
+    fps?.frame(ms);
+    if (!size) return;
+    ctx.setTransform(size.scaleX, 0, 0, size.scaleY, 0, 0);
+    scene.draw(ctx, { ...liveInput(latest), done: reward.progress.done, singing: reward.singing(ms) }, ms / 1000);
   };
-  requestAnimationFrame(frame);
+  const loop = (on: boolean) => {
+    if (on && rafId === null && document.visibilityState === 'visible') {
+      fps?.reset();
+      rafId = requestAnimationFrame(frame);
+    } else if (!on && rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  };
+  document.addEventListener('visibilitychange', () => loop(document.visibilityState === 'visible'));
+  window.addEventListener('pagehide', () => loop(false));
+  // Back from the back/forward cache: pagehide stopped the mic and the loop.
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) loop(true);
+  });
+  loop(true);
+
+  // ---- Helpers ----
+
+  function applySettings(next: Settings): void {
+    const a4Changed = next.a4 !== settings.a4;
+    settings = next;
+    saveSettings(settings);
+    scene.showCents = settings.showCents;
+    controls.setA4(settings.a4);
+    if (settings.muted) reward.mute();
+    if (a4Changed) {
+      run.tracker?.setA4(settings.a4);
+      latest = IDLE;
+      // Strings tuned against the old reference aren't in tune against the new one.
+      if (reward.progress.count > 0 || reward.playing) reward.reset(`A4 is now ${settings.a4} Hz. Session reset.`);
+    }
+  }
+
+  function speak(output: TrackerOutput): void {
+    const { verdict, cents } = liveInput(output);
+    const name = output.string ? STANDARD_TUNING[output.string.index].name : null;
+    const text = announcer.update({ string: name, verdict, cents }, performance.now());
+    if (text) reading.textContent = text;
+  }
 
   function showMessage(text: string | null): void {
     message.hidden = text === null;
@@ -126,78 +224,11 @@ export function mountTuner(root: HTMLElement): void {
     if (text !== null && hint.textContent !== text) hint.textContent = text;
   }
 
-  function beginChorus(): void {
-    leadIn = null;
-    if (!session) return;
-    latest = IDLE;
-    showHint(null);
-    chorus = startChorus(session.context, controls.muted, () => {
-      chorus = null;
-    });
-  }
-
-  function stopChorus(): void {
-    if (leadIn !== null) window.clearTimeout(leadIn);
-    leadIn = null;
-    chorus?.stop();
-    chorus = null;
-  }
-
-  function track(output: TrackerOutput, timeMs: number): void {
-    // Only frames that actually heard the string count, not the tracker's decay hold.
-    const sounding = tracker.inspect().sinceLastReadingMs === 0;
-    const step = progress.update(output, sounding, timeMs);
-    if (step.finished === null) return;
-    controls.setCanReset(true);
-    const name = STANDARD_TUNING[step.finished].name;
-    status.textContent = step.complete
-      ? `${name} tuned. All six strings are in tune.`
-      : `${name} tuned, ${progress.count} of ${STANDARD_TUNING.length}.`;
-    if (step.complete) leadIn = window.setTimeout(beginChorus, CHORUS_LEAD_IN_S * 1000);
-  }
-
-  function stopped(text: string): void {
-    stopChorus();
-    latest = IDLE;
-    session = null;
-    showHint(null);
-    showMessage(text);
-    startButton.hidden = false;
-    startButton.disabled = false;
-  }
-
-  async function start(): Promise<void> {
+  startButton.addEventListener('click', () => {
+    if (run.active) return;
     startButton.disabled = true;
     showMessage('Starting microphone…');
-    // Fresh tracker each start, so the room noise is measured again.
-    tracker = new Tracker();
-    try {
-      session = await startTuning(tracker, {
-        onUpdate(output, _analysis, _sampleRate, timeMs) {
-          latest = output;
-          const calibrating = tracker.inspect().calibrating;
-          showHint(calibrating ? HINTS.calibrating : output.string ? null : HINTS.listening);
-          track(output, timeMs);
-        },
-        // The mic would hear the chorus through the speakers (echo cancellation is off on purpose).
-        isPaused: () => chorus !== null,
-        onEnded() {
-          void session?.stop();
-          stopped(MIC_MESSAGES.disconnected);
-        },
-      });
-      showMessage(null);
-      startButton.hidden = true;
-      controls.element.hidden = false;
-    } catch (error) {
-      const failure = micStartFailure(error);
-      showMessage(failure.text);
-      startButton.disabled = !failure.canRetry;
-    }
-  }
-
-  startButton.addEventListener('click', () => {
-    if (!session) void start();
+    void run.start();
   });
 
   showHint(null);
@@ -206,4 +237,11 @@ export function mountTuner(root: HTMLElement): void {
     showMessage(MIC_MESSAGES[blocker]);
     startButton.disabled = true;
   }
+}
+
+function liveRegion(): HTMLElement {
+  const p = document.createElement('p');
+  p.className = 'visually-hidden';
+  p.setAttribute('aria-live', 'polite');
+  return p;
 }

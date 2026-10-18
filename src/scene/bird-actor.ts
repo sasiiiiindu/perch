@@ -17,6 +17,11 @@ import { BLINK_SPREAD, FIDGET_SPREAD, TWITCH_EVERY, TWITCH_SPREAD, type Personal
 const BRIGHTEN_TAU = 0.045;
 const DIM_TAU = 0.085;
 const ZOOM_TAU = 0.06;
+/**
+ * With reduced motion, poses change about 30% more slowly. They still move:
+ * the pose is the readout, and a gentle ease is calmer than a jump.
+ */
+const REDUCED_SPRING = 1.3;
 /** A note wobbling around ±3 ¢ shouldn't keep re-triggering the in-tune celebration. */
 const ARRIVE_REFRACTORY_S = 1;
 
@@ -112,10 +117,14 @@ export class BirdActor {
 
     const resting = input.done ? this.proud : this.rest;
     const target = input.poseCents === null ? resting : poseFor(this.look, input.poseCents, input.inTuneCents);
+    this.spring.tau = this.p.springTau * (input.reduced ? REDUCED_SPRING : 1);
     const sprung = this.spring.step(target, dt);
     this.fade.tau = active ? BRIGHTEN_TAU : DIM_TAU;
     this.fade.step(active ? 1 : DIM_OPACITY, dt);
-    this.grow.step(input.zoom, dt);
+    // Reduced motion: no growing (up to 4× on a phone). The bird is simply at
+    // its reading size, and the fade above brings it in.
+    if (input.reduced) this.grow.jump(input.zoom);
+    else this.grow.step(input.zoom, dt);
 
     const fx = offsets(tr, now, this.p, input.reduced);
     const pose: BirdPose = {
